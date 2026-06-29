@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NexusCAD — Law Enforcement Dispatch System</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="loginScreen" class="screen active">
+  <div class="login-bg">
+    <div class="scanline"></div>
+    <div class="grid-overlay"></div>
+  </div>
+  <div class="login-wrap">
+    <div class="login-badge">
+      <div class="badge-star">★</div>
+      <div class="badge-text">
+        <span class="badge-title">NEXUS</span>
+        <span class="badge-sub">CAD DISPATCH</span>
+      </div>
+    </div>
+    <div class="login-card">
+      <div class="card-header">
+        <div class="status-dot pulse"></div>
+        <span>SECURE TERMINAL ACCESS</span>
+        <span class="header-id">UNIT AUTH v3.1</span>
+      </div>
+      <div class="login-body">
+        <div class="form-group">
+          <label class="form-label">OFFICER ID / CALLSIGN</label>
+          <input id="loginUsername" type="text" class="form-input" placeholder="e.g. SGT-114 or Johnson" autocomplete="off" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">DEPARTMENT PASSWORD</label>
+          <div class="pass-wrap">
+            <input id="loginPassword" type="password" class="form-input" placeholder="••••••••" autocomplete="off" />
+            <button class="pass-toggle" onclick="togglePassword()" title="Show/Hide">👁</button>
+          </div>
+        </div>
+        <div id="loginError" class="login-error hidden">⚠ Invalid credentials. Access denied.</div>
+        <button class="btn-login" onclick="attemptLogin()">
+          <span>AUTHENTICATE</span>
+          <div class="btn-corner"></div>
+        </button>
+        <p class="login-hint">Default: <code>admin</code> / <code>nexus1234</code> — change in Settings</p>
+      </div>
+    </div>
+    <div class="login-footer">NEXUS CAD SYSTEM &nbsp;|&nbsp; ENCRYPTED &nbsp;|&nbsp; <span id="loginTime"></span></div>
+  </div>
+</div>
+
+<!-- ===================== SETUP MODAL ===================== -->
+<div id="setupModal" class="modal-overlay hidden">
+  <div class="modal-box">
+    <div class="modal-header">⚙ INITIAL SETUP — NEXUS CAD</div>
+    <div class="modal-body">
+      <p>Welcome! Complete setup to activate your CAD system.</p>
+      <div class="form-group">
+        <label class="form-label">DEPARTMENT NAME</label>
+        <input id="setupDept" type="text" class="form-input" placeholder="e.g. Los Santos Police Department" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">DISCORD WEBHOOK URL <span class="label-hint">(for logging)</span></label>
+        <input id="setupWebhook" type="text" class="form-input" placeholder="https://discord.com/api/webhooks/..." />
+      </div>
+      <div class="form-group">
+        <label class="form-label">SET ADMIN PASSWORD</label>
+        <input id="setupPassword" type="password" class="form-input" placeholder="Choose a strong password" />
+      </div>
+      <button class="btn-login" onclick="saveSetup()">SAVE &amp; CONTINUE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MAIN CAD ===================== -->
+<div id="cadScreen" class="screen hidden">
+
+  <!-- TOP NAV -->
+  <nav class="topnav">
+    <div class="nav-brand">
+      <span class="brand-star">★</span>
+      <span class="brand-name">NEXUS<span class="brand-cad">CAD</span></span>
+    </div>
+    <div class="nav-status">
+      <div class="status-indicator" id="deptNameNav">Loading...</div>
+      <div class="status-pill online">● ONLINE</div>
+    </div>
+    <div class="nav-right">
+      <span class="nav-officer" id="navOfficerName">OFFICER</span>
+      <span class="nav-clock" id="navClock">00:00:00</span>
+      <button class="nav-btn" onclick="openTab('settings')">⚙</button>
+      <button class="nav-btn danger" onclick="logout()">⏻</button>
+    </div>
+  </nav>
+
+  <!-- SIDEBAR -->
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-section">DISPATCH</div>
+      <button class="sidebar-btn active" data-tab="dashboard" onclick="openTab('dashboard')">
+        <span class="sb-icon">⬡</span> Dashboard
+      </button>
+      <button class="sidebar-btn" data-tab="calls" onclick="openTab('calls')">
+        <span class="sb-icon">📞</span> Active Calls
+        <span class="sb-badge" id="callsBadge">0</span>
+      </button>
+      <button class="sidebar-btn" data-tab="units" onclick="openTab('units')">
+        <span class="sb-icon">🚔</span> Units
+        <span class="sb-badge" id="unitsBadge">0</span>
+      </button>
+
+      <div class="sidebar-section">RECORDS</div>
+      <button class="sidebar-btn" data-tab="civilians" onclick="openTab('civilians')">
+        <span class="sb-icon">👤</span> Civilians
+      </button>
+      <button class="sidebar-btn" data-tab="vehicles" onclick="openTab('vehicles')">
+        <span class="sb-icon">🚗</span> Vehicles
+      </button>
+      <button class="sidebar-btn" data-tab="warrants" onclick="openTab('warrants')">
+        <span class="sb-icon">📋</span> Warrants
+        <span class="sb-badge red" id="warrantsBadge">0</span>
+      </button>
+      <button class="sidebar-btn" data-tab="bolos" onclick="openTab('bolos')">
+        <span class="sb-icon">⚠</span> BOLOs
+      </button>
+
+      <div class="sidebar-section">OFFICER</div>
+      <button class="sidebar-btn" data-tab="10codes" onclick="openTab('10codes')">
+        <span class="sb-icon">📡</span> 10-Codes
+      </button>
+      <button class="sidebar-btn" data-tab="penal" onclick="openTab('penal')">
+        <span class="sb-icon">⚖</span> Penal Codes
+      </button>
+      <button class="sidebar-btn" data-tab="logs" onclick="openTab('logs')">
+        <span class="sb-icon">📜</span> Logs
+      </button>
+      <button class="sidebar-btn" data-tab="settings" onclick="openTab('settings')">
+        <span class="sb-icon">⚙</span> Settings
+      </button>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+
+      <!-- ── DASHBOARD ── -->
+      <div id="tab-dashboard" class="tab-panel active">
+        <div class="panel-header">
+          <h1 class="panel-title">⬡ Dispatch Dashboard</h1>
+          <button class="btn-primary" onclick="openTab('calls')">+ New Call</button>
+        </div>
+        <div class="stat-row">
+          <div class="stat-card">
+            <div class="stat-num" id="statCalls">0</div>
+            <div class="stat-label">Active Calls</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-num" id="statUnits">0</div>
+            <div class="stat-label">On-Duty Units</div>
+          </div>
+          <div class="stat-card red">
+            <div class="stat-num" id="statWarrants">0</div>
+            <div class="stat-label">Active Warrants</div>
+          </div>
+          <div class="stat-card amber">
+            <div class="stat-num" id="statBolos">0</div>
+            <div class="stat-label">Active BOLOs</div>
+          </div>
+        </div>
+        <div class="dash-grid">
+          <div class="dash-card">
+            <div class="dash-card-title">📞 Recent Calls</div>
+            <div id="dashRecentCalls" class="list-empty">No active calls.</div>
+          </div>
+          <div class="dash-card">
+            <div class="dash-card-title">🚔 Units On Duty</div>
+            <div id="dashUnits" class="list-empty">No units signed on.</div>
+          </div>
+          <div class="dash-card wide">
+            <div class="dash-card-title">⚠ Active BOLOs &amp; Warrants</div>
+            <div id="dashAlerts" class="list-empty">No active alerts.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── ACTIVE CALLS ── -->
+      <div id="tab-calls" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">📞 Active Calls</h1>
+          <button class="btn-primary" onclick="showCallForm()">+ Create Call</button>
+        </div>
+        <div id="callFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">NEW DISPATCH CALL</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">CALL TYPE</label>
+              <select id="callType" class="form-input">
+                <option>Traffic Stop</option>
+                <option>Disturbance</option>
+                <option>Pursuit</option>
+                <option>Assault</option>
+                <option>Robbery</option>
+                <option>Shooting</option>
+                <option>Domestic</option>
+                <option>Welfare Check</option>
+                <option>Burglary</option>
+                <option>Suspicious Person</option>
+                <option>10-50 (Accident)</option>
+                <option>Other</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">PRIORITY</label>
+              <select id="callPriority" class="form-input">
+                <option value="1">1 — CRITICAL</option>
+                <option value="2" selected>2 — HIGH</option>
+                <option value="3">3 — MEDIUM</option>
+                <option value="4">4 — LOW</option>
+              </select>
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">LOCATION / ADDRESS</label>
+              <input id="callLocation" type="text" class="form-input" placeholder="e.g. 123 Main St / Little Seoul" />
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">DESCRIPTION</label>
+              <textarea id="callDesc" class="form-input" rows="3" placeholder="Detailed call description..."></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">ASSIGNED UNIT(S)</label>
+              <input id="callUnit" type="text" class="form-input" placeholder="e.g. 1-ADAM-12" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">CALLER NAME</label>
+              <input id="callCaller" type="text" class="form-input" placeholder="Caller / Reporting party" />
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="createCall()">DISPATCH CALL</button>
+            <button class="btn-secondary" onclick="hideCallForm()">CANCEL</button>
+          </div>
+        </div>
+        <div id="callsList" class="calls-list"></div>
+      </div>
+
+      <!-- ── UNITS ── -->
+      <div id="tab-units" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">🚔 Unit Management</h1>
+          <button class="btn-primary" onclick="showUnitForm()">+ Sign On Unit</button>
+        </div>
+        <div id="unitFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">SIGN ON UNIT</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">UNIT / CALLSIGN</label>
+              <input id="unitCallsign" type="text" class="form-input" placeholder="e.g. 1-ADAM-12" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">OFFICER NAME</label>
+              <input id="unitName" type="text" class="form-input" placeholder="Officer Full Name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">BADGE #</label>
+              <input id="unitBadge" type="text" class="form-input" placeholder="e.g. 2847" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">RANK</label>
+              <select id="unitRank" class="form-input">
+                <option>Cadet</option>
+                <option>Officer</option>
+                <option>Senior Officer</option>
+                <option>Corporal</option>
+                <option>Sergeant</option>
+                <option>Lieutenant</option>
+                <option>Captain</option>
+                <option>Commander</option>
+                <option>Deputy Chief</option>
+                <option>Chief</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">DEPARTMENT</label>
+              <select id="unitDept" class="form-input">
+                <option>Patrol</option>
+                <option>Traffic</option>
+                <option>K9</option>
+                <option>SWAT</option>
+                <option>Investigations</option>
+                <option>Narcotics</option>
+                <option>Air Support</option>
+                <option>Dispatch</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">STATUS</label>
+              <select id="unitStatus" class="form-input">
+                <option value="10-8">10-8 (Available)</option>
+                <option value="10-6">10-6 (Busy)</option>
+                <option value="10-7">10-7 (Off Duty)</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="signOnUnit()">SIGN ON</button>
+            <button class="btn-secondary" onclick="hideUnitForm()">CANCEL</button>
+          </div>
+        </div>
+        <div id="unitsList" class="units-list"></div>
+      </div>
+
+      <!-- ── CIVILIANS ── -->
+      <div id="tab-civilians" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">👤 Civilian Records</h1>
+          <button class="btn-primary" onclick="showCivForm()">+ Add Record</button>
+        </div>
+        <div id="civFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">CIVILIAN RECORD</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">FIRST NAME</label>
+              <input id="civFirst" type="text" class="form-input" placeholder="First Name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">LAST NAME</label>
+              <input id="civLast" type="text" class="form-input" placeholder="Last Name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">DATE OF BIRTH</label>
+              <input id="civDob" type="date" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">GENDER</label>
+              <select id="civGender" class="form-input">
+                <option>Male</option><option>Female</option><option>Non-Binary</option><option>Unknown</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">ETHNICITY</label>
+              <input id="civEthnicity" type="text" class="form-input" placeholder="e.g. Hispanic" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">HEIGHT</label>
+              <input id="civHeight" type="text" class="form-input" placeholder='e.g. 5&apos;10"' />
+            </div>
+            <div class="form-group">
+              <label class="form-label">WEIGHT</label>
+              <input id="civWeight" type="text" class="form-input" placeholder="e.g. 175 lbs" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">ADDRESS</label>
+              <input id="civAddress" type="text" class="form-input" placeholder="Residential address" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">LICENSE STATUS</label>
+              <select id="civLicense" class="form-input">
+                <option>Valid</option><option>Suspended</option><option>Revoked</option><option>None</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">OCCUPATION</label>
+              <input id="civOccupation" type="text" class="form-input" placeholder="Occupation" />
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">NOTES / FLAGS</label>
+              <textarea id="civNotes" class="form-input" rows="2" placeholder="Additional notes, flags, warnings..."></textarea>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="saveCivilian()">SAVE RECORD</button>
+            <button class="btn-secondary" onclick="hideCivForm()">CANCEL</button>
+          </div>
+        </div>
+        <div class="search-bar">
+          <input id="civSearch" type="text" class="form-input" placeholder="🔍 Search by name..." oninput="renderCivilians()" />
+        </div>
+        <div id="civiliansList"></div>
+      </div>
+
+      <!-- ── VEHICLES ── -->
+      <div id="tab-vehicles" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">🚗 Vehicle Records</h1>
+          <button class="btn-primary" onclick="showVehForm()">+ Add Vehicle</button>
+        </div>
+        <div id="vehFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">VEHICLE RECORD</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">PLATE NUMBER</label>
+              <input id="vehPlate" type="text" class="form-input" placeholder="e.g. ABC1234" style="text-transform:uppercase" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">STATE / REGION</label>
+              <input id="vehState" type="text" class="form-input" placeholder="e.g. San Andreas" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">YEAR</label>
+              <input id="vehYear" type="number" class="form-input" placeholder="e.g. 2021" min="1900" max="2099" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">MAKE</label>
+              <input id="vehMake" type="text" class="form-input" placeholder="e.g. Ford" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">MODEL</label>
+              <input id="vehModel" type="text" class="form-input" placeholder="e.g. F-150" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">COLOR</label>
+              <input id="vehColor" type="text" class="form-input" placeholder="e.g. Midnight Blue" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">REGISTERED OWNER</label>
+              <input id="vehOwner" type="text" class="form-input" placeholder="Owner name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">REG. STATUS</label>
+              <select id="vehReg" class="form-input">
+                <option>Valid</option><option>Expired</option><option>Suspended</option><option>Stolen</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">INSURANCE</label>
+              <select id="vehInsurance" class="form-input">
+                <option>Valid</option><option>Expired</option><option>None</option>
+              </select>
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">NOTES</label>
+              <textarea id="vehNotes" class="form-input" rows="2" placeholder="Additional notes..."></textarea>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="saveVehicle()">SAVE RECORD</button>
+            <button class="btn-secondary" onclick="hideVehForm()">CANCEL</button>
+          </div>
+        </div>
+        <div class="search-bar">
+          <input id="vehSearch" type="text" class="form-input" placeholder="🔍 Search by plate or owner..." oninput="renderVehicles()" />
+        </div>
+        <div id="vehiclesList"></div>
+      </div>
+
+      <!-- ── WARRANTS ── -->
+      <div id="tab-warrants" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">📋 Warrants</h1>
+          <button class="btn-primary" onclick="showWarrantForm()">+ Issue Warrant</button>
+        </div>
+        <div id="warrantFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">ISSUE WARRANT</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">SUBJECT NAME</label>
+              <input id="wSubject" type="text" class="form-input" placeholder="Full name" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">WARRANT TYPE</label>
+              <select id="wType" class="form-input">
+                <option>Arrest Warrant</option>
+                <option>Search Warrant</option>
+                <option>Bench Warrant</option>
+                <option>Material Witness</option>
+              </select>
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">CHARGES</label>
+              <input id="wCharges" type="text" class="form-input" placeholder="e.g. PC 187 — Murder" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">ISSUING OFFICER</label>
+              <input id="wOfficer" type="text" class="form-input" placeholder="Officer name / badge" />
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">NOTES</label>
+              <textarea id="wNotes" class="form-input" rows="2" placeholder="Additional notes..."></textarea>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="saveWarrant()">ISSUE WARRANT</button>
+            <button class="btn-secondary" onclick="hideWarrantForm()">CANCEL</button>
+          </div>
+        </div>
+        <div id="warrantsList"></div>
+      </div>
+
+      <!-- ── BOLOs ── -->
+      <div id="tab-bolos" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">⚠ Be On the Lookout</h1>
+          <button class="btn-primary" onclick="showBoloForm()">+ Issue BOLO</button>
+        </div>
+        <div id="boloFormWrap" class="form-panel hidden">
+          <div class="form-panel-title">ISSUE BOLO</div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label class="form-label">BOLO TYPE</label>
+              <select id="boloType" class="form-input">
+                <option>Person</option><option>Vehicle</option><option>Suspect</option>
+              </select>
+            </div>
+            <div class="form-group wide">
+              <label class="form-label">DESCRIPTION</label>
+              <textarea id="boloDesc" class="form-input" rows="3" placeholder="Detailed description of person/vehicle..."></textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">LAST KNOWN LOCATION</label>
+              <input id="boloLocation" type="text" class="form-input" placeholder="Location" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">REASON</label>
+              <input id="boloReason" type="text" class="form-input" placeholder="Reason for BOLO" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">ARMED / DANGEROUS</label>
+              <select id-"boloDanger" id="boloDanger" class="form-input">
+                <option value="no">No</option>
+                <option value="yes">Yes — Armed &amp; Dangerous</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn-primary" onclick="saveBolo()">ISSUE BOLO</button>
+            <button class="btn-secondary" onclick="hideBoloForm()">CANCEL</button>
+          </div>
+        </div>
+        <div id="bolosList"></div>
+      </div>
+
+      <!-- ── 10-CODES ── -->
+      <div id="tab-10codes" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">📡 10-Codes Reference</h1>
+        </div>
+        <div class="search-bar">
+          <input id="codeSearch" type="text" class="form-input" placeholder="🔍 Search codes..." oninput="renderCodes()" />
+        </div>
+        <div id="codesList"></div>
+      </div>
+
+      <!-- ── PENAL CODES ── -->
+      <div id="tab-penal" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">⚖ Penal Code Reference</h1>
+        </div>
+        <div class="search-bar">
+          <input id="penalSearch" type="text" class="form-input" placeholder="🔍 Search penal codes..." oninput="renderPenal()" />
+        </div>
+        <div id="penalList"></div>
+      </div>
+
+      <!-- ── LOGS ── -->
+      <div id="tab-logs" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">📜 Activity Logs</h1>
+          <button class="btn-secondary" onclick="clearLogs()">Clear Logs</button>
+        </div>
+        <div id="logsList" class="logs-list"></div>
+      </div>
+
+      <!-- ── SETTINGS ── -->
+      <div id="tab-settings" class="tab-panel hidden">
+        <div class="panel-header">
+          <h1 class="panel-title">⚙ Settings</h1>
+        </div>
+        <div class="settings-grid">
+          <div class="settings-card">
+            <div class="settings-card-title">🏢 Department Info</div>
+            <div class="form-group">
+              <label class="form-label">DEPARTMENT NAME</label>
+              <input id="settingsDept" type="text" class="form-input" />
+            </div>
+            <button class="btn-primary" onclick="saveDeptSettings()">Save</button>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-title">🔔 Discord Webhook</div>
+            <div class="form-group">
+              <label class="form-label">WEBHOOK URL</label>
+              <input id="settingsWebhook" type="text" class="form-input" placeholder="https://discord.com/api/webhooks/..." />
+            </div>
+            <div class="form-group">
+              <label class="form-label">LOG LEVEL</label>
+              <select id="settingsLogLevel" class="form-input">
+                <option value="all">All Events</option>
+                <option value="calls">Calls Only</option>
+                <option value="critical">Critical Only</option>
+              </select>
+            </div>
+            <button class="btn-primary" onclick="saveWebhookSettings()">Save</button>
+            <button class="btn-secondary" onclick="testWebhook()">Test Webhook</button>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-title">🔒 Change Password</div>
+            <div class="form-group">
+              <label class="form-label">CURRENT PASSWORD</label>
+              <input id="currPass" type="password" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">NEW PASSWORD</label>
+              <input id="newPass" type="password" class="form-input" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">CONFIRM PASSWORD</label>
+              <input id="confPass" type="password" class="form-input" />
+            </div>
+            <button class="btn-primary" onclick="changePassword()">Change Password</button>
+          </div>
+          <div class="settings-card">
+            <div class="settings-card-title">👥 Manage Officers</div>
+            <div id="officerAccounts"></div>
+            <div class="form-group" style="margin-top:1rem">
+              <label class="form-label">NEW OFFICER ID</label>
+              <input id="newOfficerId" type="text" class="form-input" placeholder="e.g. SGT-114" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">NEW OFFICER PASSWORD</label>
+              <input id="newOfficerPass" type="password" class="form-input" />
+            </div>
+            <button class="btn-primary" onclick="addOfficer()">Add Officer</button>
+          </div>
+          <div class="settings-card danger-card">
+            <div class="settings-card-title">⚠ Danger Zone</div>
+            <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem">These actions cannot be undone.</p>
+            <button class="btn-danger" onclick="clearAllData()">🗑 Clear All CAD Data</button>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+</div>
+
+<!-- TOAST -->
+<div id="toast" class="toast hidden"></div>
+
+<!-- CONFIRM MODAL -->
+<div id="confirmModal" class="modal-overlay hidden">
+  <div class="modal-box small">
+    <div class="modal-header" id="confirmTitle">Confirm</div>
+    <div class="modal-body">
+      <p id="confirmMsg"></p>
+      <div class="form-actions">
+        <button class="btn-danger" id="confirmYes">Yes</button>
+        <button class="btn-secondary" onclick="closeConfirm()">Cancel</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,974 @@
+/* =============================================
+   NEXUS CAD — APP LOGIC (app.js)
+   =============================================
+   Data is stored in localStorage.
+   Discord logging via HTTPS Webhook POST.
+   ============================================= */
+
+// ─────────────────────────────────────
+//  STATE
+// ─────────────────────────────────────
+let state = {
+  calls: [],
+  units: [],
+  civilians: [],
+  vehicles: [],
+  warrants: [],
+  bolos: [],
+  logs: [],
+  officers: { admin: 'nexus1234' }, // { username: password }
+  settings: {
+    deptName: '',
+    webhookUrl: '',
+    logLevel: 'all',
+    password: 'nexus1234'
+  }
+};
+
+let currentOfficer = null;
+let callIdCounter = 1000;
+
+// ─────────────────────────────────────
+//  INIT
+// ─────────────────────────────────────
+function init() {
+  loadState();
+  updateClock();
+  setInterval(updateClock, 1000);
+
+  // Clock in login screen
+  setInterval(() => {
+    const el = document.getElementById('loginTime');
+    if (el) el.textContent = new Date().toLocaleTimeString();
+  }, 1000);
+  const el = document.getElementById('loginTime');
+  if (el) el.textContent = new Date().toLocaleTimeString();
+
+  // Show setup if first run
+  if (!state.settings.deptName) {
+    document.getElementById('setupModal').classList.remove('hidden');
+  }
+}
+
+function loadState() {
+  try {
+    const saved = localStorage.getItem('nexuscad_state');
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      state = { ...state, ...parsed };
+      callIdCounter = state.calls.length > 0
+        ? Math.max(...state.calls.map(c => parseInt(c.id.replace('CAD-','')))) + 1
+        : 1000;
+    }
+  } catch(e) { console.error('State load error', e); }
+}
+
+function saveState() {
+  try { localStorage.setItem('nexuscad_state', JSON.stringify(state)); }
+  catch(e) { console.error('State save error', e); }
+}
+
+// ─────────────────────────────────────
+//  AUTH
+// ─────────────────────────────────────
+function togglePassword() {
+  const inp = document.getElementById('loginPassword');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+function attemptLogin() {
+  const user = document.getElementById('loginUsername').value.trim();
+  const pass = document.getElementById('loginPassword').value;
+  const err  = document.getElementById('loginError');
+
+  if (!user || !pass) {
+    err.classList.remove('hidden');
+    err.textContent = '⚠ Enter your Officer ID and password.';
+    return;
+  }
+
+  // Check officers map first, then admin password
+  let valid = false;
+  if (state.officers[user.toLowerCase()] === pass) valid = true;
+  if (user.toLowerCase() === 'admin' && pass === state.settings.password) valid = true;
+
+  if (valid) {
+    currentOfficer = user.toUpperCase();
+    err.classList.add('hidden');
+    document.getElementById('loginScreen').classList.add('hidden');
+    document.getElementById('cadScreen').classList.remove('hidden');
+    document.getElementById('navOfficerName').textContent = currentOfficer;
+    document.getElementById('deptNameNav').textContent = state.settings.deptName || 'NEXUS CAD';
+    document.getElementById('settingsDept').value = state.settings.deptName || '';
+    document.getElementById('settingsWebhook').value = state.settings.webhookUrl || '';
+    document.getElementById('settingsLogLevel').value = state.settings.logLevel || 'all';
+    openTab('dashboard');
+    updateDashboard();
+    renderAll();
+    addLog('system', `${currentOfficer} logged in.`);
+    sendDiscordLog('🔐 **Login**', `Officer **${currentOfficer}** logged into NexusCAD.`, 0x00bfff);
+  } else {
+    err.classList.remove('hidden');
+    err.textContent = '⚠ Invalid credentials. Access denied.';
+    document.getElementById('loginPassword').value = '';
+  }
+}
+
+function logout() {
+  confirm2('Sign Out', `Sign out as ${currentOfficer}?`, () => {
+    addLog('system', `${currentOfficer} logged out.`);
+    sendDiscordLog('🚪 **Logout**', `Officer **${currentOfficer}** signed out.`, 0x4a6070);
+    saveState();
+    currentOfficer = null;
+    document.getElementById('cadScreen').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+    document.getElementById('loginUsername').value = '';
+    document.getElementById('loginPassword').value = '';
+  });
+}
+
+// ─────────────────────────────────────
+//  SETUP
+// ─────────────────────────────────────
+function saveSetup() {
+  const dept    = document.getElementById('setupDept').value.trim();
+  const webhook = document.getElementById('setupWebhook').value.trim();
+  const pass    = document.getElementById('setupPassword').value;
+  if (!dept) { showToast('Enter a department name.', 'error'); return; }
+  state.settings.deptName  = dept;
+  state.settings.webhookUrl= webhook;
+  if (pass) state.settings.password = pass;
+  saveState();
+  document.getElementById('setupModal').classList.add('hidden');
+  showToast('Setup saved! Log in to continue.', 'success');
+}
+
+// ─────────────────────────────────────
+//  NAVIGATION
+// ─────────────────────────────────────
+function openTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.sidebar-btn').forEach(b => b.classList.remove('active'));
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.classList.add('active');
+  const btn = document.querySelector(`[data-tab="${name}"]`);
+  if (btn) btn.classList.add('active');
+
+  // Render on open
+  if (name === 'dashboard') { updateDashboard(); }
+  if (name === 'calls')     { renderCalls(); }
+  if (name === 'units')     { renderUnits(); }
+  if (name === 'civilians') { renderCivilians(); }
+  if (name === 'vehicles')  { renderVehicles(); }
+  if (name === 'warrants')  { renderWarrants(); }
+  if (name === 'bolos')     { renderBolos(); }
+  if (name === '10codes')   { renderCodes(); }
+  if (name === 'penal')     { renderPenal(); }
+  if (name === 'logs')      { renderLogs(); }
+  if (name === 'settings')  { renderOfficerList(); }
+}
+
+function renderAll() {
+  renderCalls(); renderUnits(); renderCivilians(); renderVehicles();
+  renderWarrants(); renderBolos(); renderCodes(); renderPenal(); renderLogs();
+  updateBadges();
+}
+
+// ─────────────────────────────────────
+//  CLOCK
+// ─────────────────────────────────────
+function updateClock() {
+  const el = document.getElementById('navClock');
+  if (el) el.textContent = new Date().toLocaleTimeString();
+}
+
+// ─────────────────────────────────────
+//  DASHBOARD
+// ─────────────────────────────────────
+function updateDashboard() {
+  document.getElementById('statCalls').textContent = state.calls.length;
+  document.getElementById('statUnits').textContent = state.units.filter(u => u.status !== '10-7').length;
+  document.getElementById('statWarrants').textContent = state.warrants.length;
+  document.getElementById('statBolos').textContent = state.bolos.length;
+
+  // Recent calls
+  const drc = document.getElementById('dashRecentCalls');
+  if (state.calls.length === 0) {
+    drc.innerHTML = '<div class="list-empty">No active calls.</div>';
+  } else {
+    drc.innerHTML = state.calls.slice(-5).reverse().map(c =>
+      `<div class="call-card priority-${c.priority}" style="margin-bottom:0.5rem">
+        <div class="call-header">
+          <span class="call-id">${c.id}</span>
+          <span class="call-type">${c.type}</span>
+          <span class="call-priority p${c.priority}">${priorityLabel(c.priority)}</span>
+        </div>
+        <div class="call-location">📍 ${c.location}</div>
+      </div>`
+    ).join('');
+  }
+
+  // Units
+  const du = document.getElementById('dashUnits');
+  const onDuty = state.units.filter(u => u.status !== '10-7');
+  if (onDuty.length === 0) {
+    du.innerHTML = '<div class="list-empty">No units signed on.</div>';
+  } else {
+    du.innerHTML = onDuty.map(u =>
+      `<div class="officer-row">
+        <span style="color:var(--accent);font-family:var(--font-display);font-weight:600">${u.callsign}</span>
+        <span>${u.name}</span>
+        <span class="unit-status ${statusClass(u.status)}">${u.status}</span>
+      </div>`
+    ).join('');
+  }
+
+  // Alerts
+  const da = document.getElementById('dashAlerts');
+  const alerts = [
+    ...state.bolos.map(b => `<div class="bolo-card" style="margin-bottom:0.5rem"><span class="bolo-type">⚠ BOLO</span> ${b.desc.slice(0,80)}</div>`),
+    ...state.warrants.map(w => `<div class="warrant-card" style="margin-bottom:0.5rem"><span class="warrant-subject">${w.subject}</span> — ${w.charges}</div>`)
+  ];
+  da.innerHTML = alerts.length ? alerts.join('') : '<div class="list-empty">No active alerts.</div>';
+
+  updateBadges();
+}
+
+function updateBadges() {
+  document.getElementById('callsBadge').textContent   = state.calls.length;
+  document.getElementById('unitsBadge').textContent   = state.units.filter(u => u.status !== '10-7').length;
+  document.getElementById('warrantsBadge').textContent= state.warrants.length;
+}
+
+// ─────────────────────────────────────
+//  CALLS
+// ─────────────────────────────────────
+function showCallForm()  { document.getElementById('callFormWrap').classList.remove('hidden'); }
+function hideCallForm()  { document.getElementById('callFormWrap').classList.add('hidden'); clearCallForm(); }
+
+function clearCallForm() {
+  ['callType','callPriority','callLocation','callDesc','callUnit','callCaller']
+    .forEach(id => { const el = document.getElementById(id); if(el) el.value = el.tagName === 'SELECT' ? el.options[0]?.value : ''; });
+}
+
+function createCall() {
+  const type     = document.getElementById('callType').value;
+  const priority = document.getElementById('callPriority').value;
+  const location = document.getElementById('callLocation').value.trim();
+  const desc     = document.getElementById('callDesc').value.trim();
+  const unit     = document.getElementById('callUnit').value.trim();
+  const caller   = document.getElementById('callCaller').value.trim();
+
+  if (!location) { showToast('Enter a location for the call.', 'error'); return; }
+
+  const call = {
+    id: 'CAD-' + (callIdCounter++),
+    type, priority, location, desc,
+    unit: unit || 'Unassigned',
+    caller: caller || 'Unknown',
+    time: new Date().toISOString(),
+    officer: currentOfficer
+  };
+  state.calls.push(call);
+  saveState();
+  hideCallForm();
+  renderCalls();
+  updateDashboard();
+
+  addLog('call', `Call ${call.id} created — ${type} at ${location} (P${priority})`);
+  sendDiscordLog(
+    `📞 **New Call — ${type}**`,
+    `**Call ID:** ${call.id}\n**Priority:** ${priorityLabel(priority)}\n**Location:** ${location}\n**Description:** ${desc || 'None'}\n**Unit:** ${unit || 'Unassigned'}\n**Dispatcher:** ${currentOfficer}`,
+    priorityColor(priority)
+  );
+  showToast(`Call ${call.id} dispatched!`, 'success');
+}
+
+function closeCall(id) {
+  confirm2('Close Call', `Mark call ${id} as closed?`, () => {
+    const call = state.calls.find(c => c.id === id);
+    if (!call) return;
+    addLog('call', `Call ${id} closed by ${currentOfficer}`);
+    sendDiscordLog(`✅ **Call Closed — ${call.type}**`, `**Call ID:** ${id}\n**Location:** ${call.location}\n**Closed by:** ${currentOfficer}`, 0x00e676);
+    state.calls = state.calls.filter(c => c.id !== id);
+    saveState();
+    renderCalls();
+    updateDashboard();
+    showToast(`Call ${id} closed.`, 'success');
+  });
+}
+
+function renderCalls() {
+  const el = document.getElementById('callsList');
+  if (!el) return;
+  if (state.calls.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No active calls. Create one above.</div>'; return; }
+  el.innerHTML = state.calls.slice().reverse().map(c => `
+    <div class="call-card priority-${c.priority}">
+      <div class="call-header">
+        <span class="call-id">${c.id}</span>
+        <span class="call-type">${c.type}</span>
+        <span class="call-priority p${c.priority}">${priorityLabel(c.priority)}</span>
+      </div>
+      <div class="call-location">📍 ${c.location}</div>
+      ${c.desc ? `<div class="call-desc">${c.desc}</div>` : ''}
+      <div class="call-meta">
+        <span>🚔 ${c.unit}</span>
+        <span>📞 ${c.caller}</span>
+        <span>⏰ ${fmtTime(c.time)}</span>
+        <span>👮 ${c.officer}</span>
+      </div>
+      <div class="call-actions">
+        <button class="btn-primary btn-sm" onclick="closeCall('${c.id}')">✓ Close</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────
+//  UNITS
+// ─────────────────────────────────────
+function showUnitForm() { document.getElementById('unitFormWrap').classList.remove('hidden'); }
+function hideUnitForm() { document.getElementById('unitFormWrap').classList.add('hidden'); }
+
+function signOnUnit() {
+  const callsign = document.getElementById('unitCallsign').value.trim().toUpperCase();
+  const name     = document.getElementById('unitName').value.trim();
+  const badge    = document.getElementById('unitBadge').value.trim();
+  const rank     = document.getElementById('unitRank').value;
+  const dept     = document.getElementById('unitDept').value;
+  const status   = document.getElementById('unitStatus').value;
+
+  if (!callsign || !name) { showToast('Enter callsign and name.', 'error'); return; }
+  if (state.units.find(u => u.callsign === callsign)) {
+    showToast(`Unit ${callsign} already signed on.`, 'error'); return;
+  }
+
+  const unit = { callsign, name, badge, rank, dept, status, time: new Date().toISOString() };
+  state.units.push(unit);
+  saveState();
+  hideUnitForm();
+  renderUnits();
+  updateDashboard();
+
+  addLog('unit', `Unit ${callsign} (${name}) signed on — ${rank} / ${dept} — ${status}`);
+  sendDiscordLog(`🚔 **Unit Signed On**`, `**Callsign:** ${callsign}\n**Officer:** ${rank} ${name}\n**Badge:** ${badge || 'N/A'}\n**Department:** ${dept}\n**Status:** ${status}`, 0x00e676);
+  showToast(`Unit ${callsign} signed on.`, 'success');
+}
+
+function updateUnitStatus(callsign, newStatus) {
+  const unit = state.units.find(u => u.callsign === callsign);
+  if (!unit) return;
+  unit.status = newStatus;
+  saveState();
+  renderUnits();
+  updateDashboard();
+  addLog('unit', `Unit ${callsign} status → ${newStatus}`);
+  sendDiscordLog(`🔄 **Status Change**`, `**Unit:** ${callsign}\n**New Status:** ${newStatus}\n**Updated by:** ${currentOfficer}`, 0x00bfff);
+  showToast(`${callsign} → ${newStatus}`, 'info');
+}
+
+function signOffUnit(callsign) {
+  confirm2('Sign Off Unit', `Sign off unit ${callsign}?`, () => {
+    state.units = state.units.filter(u => u.callsign !== callsign);
+    saveState();
+    renderUnits();
+    updateDashboard();
+    addLog('unit', `Unit ${callsign} signed off.`);
+    sendDiscordLog(`🔴 **Unit Signed Off**`, `**Callsign:** ${callsign}\n**Signed off by:** ${currentOfficer}`, 0xff3d57);
+    showToast(`${callsign} signed off.`, 'info');
+  });
+}
+
+function renderUnits() {
+  const el = document.getElementById('unitsList');
+  if (!el) return;
+  if (state.units.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No units. Sign one on above.</div>'; return; }
+  el.innerHTML = state.units.map(u => `
+    <div class="unit-card">
+      <div class="unit-callsign">${u.callsign}</div>
+      <div class="unit-info">
+        <div class="unit-name">${u.rank} ${u.name}</div>
+        <div class="unit-sub">Badge: ${u.badge || 'N/A'} &nbsp;|&nbsp; ${u.dept}</div>
+      </div>
+      <span class="unit-status ${statusClass(u.status)}">${u.status}</span>
+      <div class="unit-actions">
+        <select class="form-input btn-sm" style="width:130px;font-size:0.72rem"
+          onchange="updateUnitStatus('${u.callsign}', this.value)">
+          <option value="10-8" ${u.status==='10-8'?'selected':''}>10-8 Available</option>
+          <option value="10-6" ${u.status==='10-6'?'selected':''}>10-6 Busy</option>
+          <option value="10-4" ${u.status==='10-4'?'selected':''}>10-4 Acknowledged</option>
+          <option value="10-7" ${u.status==='10-7'?'selected':''}>10-7 Off Duty</option>
+          <option value="10-97"${u.status==='10-97'?'selected':''}>10-97 On Scene</option>
+          <option value="10-15"${u.status==='10-15'?'selected':''}>10-15 Prisoner</option>
+        </select>
+        <button class="btn-danger btn-sm" onclick="signOffUnit('${u.callsign}')">Sign Off</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────
+//  CIVILIANS
+// ─────────────────────────────────────
+function showCivForm()  { document.getElementById('civFormWrap').classList.remove('hidden'); }
+function hideCivForm()  { document.getElementById('civFormWrap').classList.add('hidden'); }
+
+function saveCivilian() {
+  const first  = document.getElementById('civFirst').value.trim();
+  const last   = document.getElementById('civLast').value.trim();
+  if (!first || !last) { showToast('Enter first and last name.', 'error'); return; }
+  const civ = {
+    id: Date.now(),
+    first, last,
+    dob:        document.getElementById('civDob').value,
+    gender:     document.getElementById('civGender').value,
+    ethnicity:  document.getElementById('civEthnicity').value.trim(),
+    height:     document.getElementById('civHeight').value.trim(),
+    weight:     document.getElementById('civWeight').value.trim(),
+    address:    document.getElementById('civAddress').value.trim(),
+    license:    document.getElementById('civLicense').value,
+    occupation: document.getElementById('civOccupation').value.trim(),
+    notes:      document.getElementById('civNotes').value.trim(),
+    added:      new Date().toISOString()
+  };
+  state.civilians.push(civ);
+  saveState();
+  hideCivForm();
+  renderCivilians();
+  addLog('system', `Civilian record added: ${first} ${last}`);
+  sendDiscordLog('👤 **Civilian Record Added**', `**Name:** ${first} ${last}\n**DOB:** ${civ.dob || 'N/A'}\n**License:** ${civ.license}\n**Added by:** ${currentOfficer}`, 0x7a99b8);
+  showToast('Civilian record saved.', 'success');
+}
+
+function deleteCivilian(id) {
+  confirm2('Delete Record', 'Delete this civilian record?', () => {
+    state.civilians = state.civilians.filter(c => c.id !== id);
+    saveState(); renderCivilians();
+    showToast('Record deleted.', 'info');
+  });
+}
+
+function renderCivilians() {
+  const el = document.getElementById('civiliansList');
+  if (!el) return;
+  const query = (document.getElementById('civSearch')?.value || '').toLowerCase();
+  let list = state.civilians;
+  if (query) list = list.filter(c => `${c.first} ${c.last}`.toLowerCase().includes(query));
+  if (list.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No records found.</div>'; return; }
+  el.innerHTML = list.map(c => {
+    const flags = [];
+    if (c.license === 'Suspended') flags.push('<span class="flag amber">SUSP LIC</span>');
+    if (c.license === 'Revoked')   flags.push('<span class="flag red">REVOKED LIC</span>');
+    if (c.license === 'None')      flags.push('<span class="flag red">NO LICENSE</span>');
+    const hasWarrant = state.warrants.some(w => w.subject.toLowerCase().includes(c.last.toLowerCase()));
+    if (hasWarrant) flags.push('<span class="flag red">WARRANT</span>');
+    return `
+      <div class="record-card">
+        <div class="record-main">
+          <div class="record-name">${c.first} ${c.last}</div>
+          <div class="record-sub">DOB: ${c.dob || 'N/A'} &nbsp;|&nbsp; ${c.gender} &nbsp;|&nbsp; ${c.ethnicity || 'N/A'} &nbsp;|&nbsp; ${c.height || 'N/A'}</div>
+          <div class="record-sub">📍 ${c.address || 'N/A'} &nbsp;|&nbsp; 💼 ${c.occupation || 'N/A'}</div>
+          ${flags.length ? `<div class="record-flags">${flags.join('')}</div>` : ''}
+          ${c.notes ? `<div class="record-sub" style="margin-top:0.3rem;color:var(--amber)">⚠ ${c.notes}</div>` : ''}
+        </div>
+        <div class="record-actions">
+          <button class="btn-danger btn-sm" onclick="deleteCivilian(${c.id})">🗑</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────
+//  VEHICLES
+// ─────────────────────────────────────
+function showVehForm() { document.getElementById('vehFormWrap').classList.remove('hidden'); }
+function hideVehForm() { document.getElementById('vehFormWrap').classList.add('hidden'); }
+
+function saveVehicle() {
+  const plate = document.getElementById('vehPlate').value.trim().toUpperCase();
+  if (!plate) { showToast('Enter a plate number.', 'error'); return; }
+  const veh = {
+    id:        Date.now(),
+    plate,
+    state:     document.getElementById('vehState').value.trim(),
+    year:      document.getElementById('vehYear').value,
+    make:      document.getElementById('vehMake').value.trim(),
+    model:     document.getElementById('vehModel').value.trim(),
+    color:     document.getElementById('vehColor').value.trim(),
+    owner:     document.getElementById('vehOwner').value.trim(),
+    reg:       document.getElementById('vehReg').value,
+    insurance: document.getElementById('vehInsurance').value,
+    notes:     document.getElementById('vehNotes').value.trim(),
+    added:     new Date().toISOString()
+  };
+  state.vehicles.push(veh);
+  saveState();
+  hideVehForm();
+  renderVehicles();
+  addLog('system', `Vehicle added: ${plate} — ${veh.year} ${veh.make} ${veh.model}`);
+  sendDiscordLog('🚗 **Vehicle Record Added**', `**Plate:** ${plate}\n**Vehicle:** ${veh.year} ${veh.make} ${veh.model} (${veh.color})\n**Owner:** ${veh.owner || 'N/A'}\n**Reg:** ${veh.reg}\n**Added by:** ${currentOfficer}`, 0x7a99b8);
+  showToast('Vehicle record saved.', 'success');
+}
+
+function deleteVehicle(id) {
+  confirm2('Delete Record', 'Delete this vehicle record?', () => {
+    state.vehicles = state.vehicles.filter(v => v.id !== id);
+    saveState(); renderVehicles();
+    showToast('Record deleted.', 'info');
+  });
+}
+
+function renderVehicles() {
+  const el = document.getElementById('vehiclesList');
+  if (!el) return;
+  const query = (document.getElementById('vehSearch')?.value || '').toLowerCase();
+  let list = state.vehicles;
+  if (query) list = list.filter(v => v.plate.toLowerCase().includes(query) || v.owner.toLowerCase().includes(query));
+  if (list.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No records found.</div>'; return; }
+  el.innerHTML = list.map(v => {
+    const flags = [];
+    if (v.reg === 'Stolen')    flags.push('<span class="flag red">STOLEN</span>');
+    if (v.reg === 'Expired')   flags.push('<span class="flag amber">EXP REG</span>');
+    if (v.reg === 'Suspended') flags.push('<span class="flag amber">SUSP REG</span>');
+    if (v.insurance === 'Expired') flags.push('<span class="flag amber">EXP INS</span>');
+    if (v.insurance === 'None')    flags.push('<span class="flag red">NO INS</span>');
+    return `
+      <div class="record-card">
+        <div class="record-main">
+          <div class="record-name">${v.plate} <span style="color:var(--text-secondary);font-size:0.8rem">— ${v.year} ${v.make} ${v.model}</span></div>
+          <div class="record-sub">Color: ${v.color || 'N/A'} &nbsp;|&nbsp; Owner: ${v.owner || 'N/A'} &nbsp;|&nbsp; State: ${v.state || 'N/A'}</div>
+          <div class="record-sub">Reg: ${v.reg} &nbsp;|&nbsp; Insurance: ${v.insurance}</div>
+          ${flags.length ? `<div class="record-flags">${flags.join('')}</div>` : ''}
+          ${v.notes ? `<div class="record-sub" style="margin-top:0.3rem;color:var(--amber)">⚠ ${v.notes}</div>` : ''}
+        </div>
+        <div class="record-actions">
+          <button class="btn-danger btn-sm" onclick="deleteVehicle(${v.id})">🗑</button>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+// ─────────────────────────────────────
+//  WARRANTS
+// ─────────────────────────────────────
+function showWarrantForm() { document.getElementById('warrantFormWrap').classList.remove('hidden'); }
+function hideWarrantForm() { document.getElementById('warrantFormWrap').classList.add('hidden'); }
+
+function saveWarrant() {
+  const subject = document.getElementById('wSubject').value.trim();
+  const charges = document.getElementById('wCharges').value.trim();
+  if (!subject || !charges) { showToast('Enter subject and charges.', 'error'); return; }
+  const w = {
+    id:      Date.now(),
+    subject, charges,
+    type:    document.getElementById('wType').value,
+    officer: document.getElementById('wOfficer').value.trim() || currentOfficer,
+    notes:   document.getElementById('wNotes').value.trim(),
+    issued:  new Date().toISOString()
+  };
+  state.warrants.push(w);
+  saveState();
+  hideWarrantForm();
+  renderWarrants();
+  updateDashboard();
+  updateBadges();
+  addLog('warrant', `Warrant issued for ${subject} — ${charges}`);
+  sendDiscordLog('📋 **Warrant Issued**', `**Subject:** ${subject}\n**Type:** ${w.type}\n**Charges:** ${charges}\n**Issued by:** ${w.officer}`, 0xff3d57);
+  showToast('Warrant issued.', 'success');
+}
+
+function clearWarrant(id) {
+  confirm2('Clear Warrant', 'Mark this warrant as served/cleared?', () => {
+    const w = state.warrants.find(x => x.id === id);
+    if (w) { addLog('warrant', `Warrant cleared for ${w.subject}`); sendDiscordLog('✅ **Warrant Cleared**', `**Subject:** ${w.subject}\n**Cleared by:** ${currentOfficer}`, 0x00e676); }
+    state.warrants = state.warrants.filter(x => x.id !== id);
+    saveState(); renderWarrants(); updateDashboard(); updateBadges();
+    showToast('Warrant cleared.', 'success');
+  });
+}
+
+function renderWarrants() {
+  const el = document.getElementById('warrantsList');
+  if (!el) return;
+  if (state.warrants.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No active warrants.</div>'; return; }
+  el.innerHTML = state.warrants.slice().reverse().map(w => `
+    <div class="warrant-card">
+      <div class="warrant-subject">⚖ ${w.subject}</div>
+      <div class="warrant-type">${w.type}</div>
+      <div class="warrant-charges">${w.charges}</div>
+      ${w.notes ? `<div class="record-sub" style="margin-top:0.3rem">${w.notes}</div>` : ''}
+      <div class="warrant-meta">
+        <span>👮 ${w.officer}</span>
+        <span>⏰ ${fmtTime(w.issued)}</span>
+      </div>
+      <div class="call-actions" style="margin-top:0.75rem">
+        <button class="btn-primary btn-sm" onclick="clearWarrant(${w.id})">✓ Clear</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────
+//  BOLOs
+// ─────────────────────────────────────
+function showBoloForm() { document.getElementById('boloFormWrap').classList.remove('hidden'); }
+function hideBoloForm() { document.getElementById('boloFormWrap').classList.add('hidden'); }
+
+function saveBolo() {
+  const desc = document.getElementById('boloDesc').value.trim();
+  if (!desc) { showToast('Enter a description.', 'error'); return; }
+  const bolo = {
+    id:       Date.now(),
+    type:     document.getElementById('boloType').value,
+    desc,
+    location: document.getElementById('boloLocation').value.trim(),
+    reason:   document.getElementById('boloReason').value.trim(),
+    danger:   document.getElementById('boloDanger').value,
+    officer:  currentOfficer,
+    issued:   new Date().toISOString()
+  };
+  state.bolos.push(bolo);
+  saveState();
+  hideBoloForm();
+  renderBolos();
+  updateDashboard();
+  addLog('bolo', `BOLO issued — ${bolo.type}: ${desc.slice(0,60)}`);
+  const danger = bolo.danger === 'yes' ? '\n🚨 **ARMED AND DANGEROUS**' : '';
+  sendDiscordLog('⚠ **BOLO Issued**', `**Type:** ${bolo.type}\n**Description:** ${desc}\n**Location:** ${bolo.location || 'N/A'}\n**Reason:** ${bolo.reason || 'N/A'}${danger}\n**Issued by:** ${currentOfficer}`, 0xffc107);
+  showToast('BOLO issued.', 'success');
+}
+
+function clearBolo(id) {
+  confirm2('Cancel BOLO', 'Cancel this BOLO?', () => {
+    state.bolos = state.bolos.filter(b => b.id !== id);
+    saveState(); renderBolos(); updateDashboard();
+    showToast('BOLO cancelled.', 'info');
+  });
+}
+
+function renderBolos() {
+  const el = document.getElementById('bolosList');
+  if (!el) return;
+  if (state.bolos.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No active BOLOs.</div>'; return; }
+  el.innerHTML = state.bolos.slice().reverse().map(b => `
+    <div class="bolo-card ${b.danger==='yes'?'armed':''}">
+      <div class="bolo-header">
+        <span class="bolo-type">⚠ ${b.type}</span>
+        ${b.danger==='yes' ? '<span class="bolo-danger-badge">🚨 ARMED & DANGEROUS</span>' : ''}
+      </div>
+      <div class="bolo-desc">${b.desc}</div>
+      ${b.reason ? `<div class="bolo-desc" style="color:var(--text-muted)">Reason: ${b.reason}</div>` : ''}
+      <div class="bolo-meta">📍 ${b.location || 'N/A'} &nbsp;|&nbsp; 👮 ${b.officer} &nbsp;|&nbsp; ⏰ ${fmtTime(b.issued)}</div>
+      <div class="call-actions" style="margin-top:0.75rem">
+        <button class="btn-secondary btn-sm" onclick="clearBolo(${b.id})">✕ Cancel</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ─────────────────────────────────────
+//  10-CODES
+// ─────────────────────────────────────
+const TEN_CODES = [
+  ['10-1','Poor radio reception'],['10-2','Good radio reception'],['10-3','Stop transmitting'],
+  ['10-4','Acknowledged / OK'],['10-5','Relay message'],['10-6','Busy — stand by'],
+  ['10-7','Out of service'],['10-8','In service / available'],['10-9','Repeat last message'],
+  ['10-10','Fight in progress'],['10-11','Animal problem'],['10-12','Stand by / stop'],
+  ['10-13','Weather / road conditions'],['10-14','Report of prowler'],['10-15','Prisoner in custody'],
+  ['10-16','Domestic disturbance'],['10-17','Meet complainant'],['10-18','Complete quickly'],
+  ['10-19','Return to station'],['10-20','Location'],['10-21','Call by telephone'],
+  ['10-22','Disregard'],['10-23','Arrived at scene'],['10-24','Assignment completed'],
+  ['10-25','Report to / contact'],['10-26','Detaining subject'],['10-27','Driver license info'],
+  ['10-28','Vehicle registration info'],['10-29','Check for wanted'],['10-30','Does not conform to rules'],
+  ['10-31','Crime in progress'],['10-32','Man with gun'],['10-33','Emergency / all units'],
+  ['10-34','Riot'],['10-35','Major crime alert'],['10-36','Correct time'],
+  ['10-37','Suspicious vehicle'],['10-38','Stopping suspicious vehicle'],['10-39','Urgent / use lights/siren'],
+  ['10-40','Silent run'],['10-41','Begin tour of duty'],['10-42','End tour of duty'],
+  ['10-50','Traffic accident'],['10-51','Tow truck needed'],['10-52','Ambulance needed'],
+  ['10-53','Road blocked'],['10-54','Livestock on highway'],['10-55','Intoxicated driver'],
+  ['10-56','Intoxicated pedestrian'],['10-57','Hit and run'],['10-58','Direct traffic'],
+  ['10-59','Escort'],['10-60','Squad in vicinity'],['10-61','Personnel in area'],
+  ['10-62','Reply to message'],['10-63','Copy / prepare to receive'],['10-65','Net message assignment'],
+  ['10-66','Message cancellation'],['10-67','Clear for net message'],['10-70','Fire alarm'],
+  ['10-71','Shooting'],['10-72','Shooting — gunshot wounds'],['10-73','Smoke report'],
+  ['10-80','Chase in progress'],['10-97','Arrived on scene'],['10-98','Prison break / escape'],
+  ['10-99','Wanted / stolen indicated'],
+];
+
+function renderCodes() {
+  const el = document.getElementById('codesList');
+  if (!el) return;
+  const q = (document.getElementById('codeSearch')?.value || '').toLowerCase();
+  const filtered = TEN_CODES.filter(([c,d]) => c.toLowerCase().includes(q) || d.toLowerCase().includes(q));
+  el.innerHTML = `<table class="codes-table">
+    <thead><tr><th>CODE</th><th>MEANING</th></tr></thead>
+    <tbody>${filtered.map(([c,d]) => `<tr><td class="code-num">${c}</td><td>${d}</td></tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ─────────────────────────────────────
+//  PENAL CODES
+// ─────────────────────────────────────
+const PENAL_CODES = [
+  ['PC 187','Murder / Homicide','Felony'],
+  ['PC 192','Manslaughter','Felony'],
+  ['PC 203','Mayhem','Felony'],
+  ['PC 207','Kidnapping','Felony'],
+  ['PC 211','Robbery','Felony'],
+  ['PC 215','Carjacking','Felony'],
+  ['PC 240','Assault','Misdemeanor'],
+  ['PC 242','Battery','Misdemeanor'],
+  ['PC 243(d)','Aggravated Battery','Felony'],
+  ['PC 245','Assault with Deadly Weapon','Felony'],
+  ['PC 246','Shooting at Inhabited Dwelling','Felony'],
+  ['PC 261','Rape','Felony'],
+  ['PC 288','Lewd Acts on Minor','Felony'],
+  ['PC 290','Sex Offender Registration','Felony'],
+  ['PC 314','Indecent Exposure','Misdemeanor'],
+  ['PC 422','Criminal Threats','Felony'],
+  ['PC 459','Burglary','Felony'],
+  ['PC 466','Possession of Burglary Tools','Misdemeanor'],
+  ['PC 470','Forgery','Felony'],
+  ['PC 484','Petty Theft','Misdemeanor'],
+  ['PC 487','Grand Theft','Felony'],
+  ['PC 496','Receiving Stolen Property','Felony'],
+  ['PC 503','Embezzlement','Felony'],
+  ['PC 518','Extortion','Felony'],
+  ['PC 530','Identity Theft','Felony'],
+  ['PC 594','Vandalism','Misdemeanor/Felony'],
+  ['PC 602','Trespassing','Misdemeanor'],
+  ['PC 647(f)','Public Intoxication','Misdemeanor'],
+  ['PC 664','Attempted Crime','Felony'],
+  ['PC 830','Impersonating Officer','Misdemeanor'],
+  ['HS 11350','Possession of Controlled Substance','Felony'],
+  ['HS 11351','Possession for Sale','Felony'],
+  ['HS 11352','Transportation of Narcotics','Felony'],
+  ['HS 11357','Possession of Marijuana','Misdemeanor'],
+  ['HS 11359','Marijuana for Sale','Felony'],
+  ['HS 11550','Under Influence of Drug','Misdemeanor'],
+  ['VC 20001','Hit and Run — Injury','Felony'],
+  ['VC 20002','Hit and Run — Property','Misdemeanor'],
+  ['VC 23152','DUI — Alcohol/Drugs','Misdemeanor/Felony'],
+  ['VC 2800.2','Felony Evading Police','Felony'],
+  ['VC 10851','Vehicle Theft','Felony'],
+  ['WIC 5150','Involuntary Hold','Civil'],
+  ['PC 148(a)','Resisting Officer','Misdemeanor'],
+  ['PC 12020','Illegal Weapons','Felony'],
+  ['PC 12025','Carrying Concealed Weapon','Felony'],
+  ['PC 25400','Carrying Concealed Firearm','Felony'],
+];
+
+function renderPenal() {
+  const el = document.getElementById('penalList');
+  if (!el) return;
+  const q = (document.getElementById('penalSearch')?.value || '').toLowerCase();
+  const filtered = PENAL_CODES.filter(([c,d,t]) => c.toLowerCase().includes(q) || d.toLowerCase().includes(q) || t.toLowerCase().includes(q));
+  el.innerHTML = `<table class="codes-table">
+    <thead><tr><th>CODE</th><th>OFFENSE</th><th>CLASS</th></tr></thead>
+    <tbody>${filtered.map(([c,d,t]) => `<tr>
+      <td class="code-num">${c}</td>
+      <td>${d}</td>
+      <td><span class="flag ${t==='Felony'?'red':t==='Misdemeanor'?'amber':'blue'}">${t}</span></td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+// ─────────────────────────────────────
+//  LOGS
+// ─────────────────────────────────────
+function addLog(type, message) {
+  state.logs.unshift({ type, message, time: new Date().toISOString() });
+  if (state.logs.length > 500) state.logs = state.logs.slice(0, 500);
+  saveState();
+}
+
+function renderLogs() {
+  const el = document.getElementById('logsList');
+  if (!el) return;
+  if (state.logs.length === 0) { el.innerHTML = '<div class="list-empty" style="padding:2rem">No logs yet.</div>'; return; }
+  el.innerHTML = state.logs.map(l => `
+    <div class="log-entry">
+      <span class="log-time">${fmtTime(l.time)}</span>
+      <span class="log-type ${l.type}">${l.type.toUpperCase()}</span>
+      <span class="log-msg">${l.message}</span>
+    </div>
+  `).join('');
+}
+
+function clearLogs() {
+  confirm2('Clear Logs', 'Clear all activity logs?', () => {
+    state.logs = [];
+    saveState(); renderLogs();
+    showToast('Logs cleared.', 'info');
+  });
+}
+
+// ─────────────────────────────────────
+//  SETTINGS
+// ─────────────────────────────────────
+function saveDeptSettings() {
+  state.settings.deptName = document.getElementById('settingsDept').value.trim();
+  saveState();
+  document.getElementById('deptNameNav').textContent = state.settings.deptName;
+  showToast('Department name saved.', 'success');
+}
+
+function saveWebhookSettings() {
+  state.settings.webhookUrl = document.getElementById('settingsWebhook').value.trim();
+  state.settings.logLevel   = document.getElementById('settingsLogLevel').value;
+  saveState();
+  showToast('Webhook settings saved.', 'success');
+}
+
+async function testWebhook() {
+  await sendDiscordLog('🧪 **Webhook Test**', `NexusCAD webhook is configured and working!\n**Department:** ${state.settings.deptName}\n**Tested by:** ${currentOfficer}`, 0x00e676);
+  showToast('Test message sent to Discord.', 'info');
+}
+
+function changePassword() {
+  const curr = document.getElementById('currPass').value;
+  const nw   = document.getElementById('newPass').value;
+  const conf = document.getElementById('confPass').value;
+  if (curr !== state.settings.password) { showToast('Current password is incorrect.', 'error'); return; }
+  if (!nw || nw.length < 6) { showToast('New password must be at least 6 characters.', 'error'); return; }
+  if (nw !== conf) { showToast('Passwords do not match.', 'error'); return; }
+  state.settings.password = nw;
+  saveState();
+  document.getElementById('currPass').value = '';
+  document.getElementById('newPass').value = '';
+  document.getElementById('confPass').value = '';
+  showToast('Password changed successfully.', 'success');
+  addLog('system', `Admin password changed by ${currentOfficer}`);
+}
+
+function addOfficer() {
+  const id   = document.getElementById('newOfficerId').value.trim().toLowerCase();
+  const pass = document.getElementById('newOfficerPass').value;
+  if (!id || !pass) { showToast('Enter ID and password.', 'error'); return; }
+  if (pass.length < 4) { showToast('Password too short.', 'error'); return; }
+  state.officers[id] = pass;
+  saveState();
+  document.getElementById('newOfficerId').value = '';
+  document.getElementById('newOfficerPass').value = '';
+  renderOfficerList();
+  showToast(`Officer ${id.toUpperCase()} added.`, 'success');
+  addLog('system', `Officer account added: ${id.toUpperCase()}`);
+}
+
+function removeOfficer(id) {
+  if (id === 'admin') { showToast('Cannot remove the admin account.', 'error'); return; }
+  confirm2('Remove Officer', `Remove officer ${id.toUpperCase()}?`, () => {
+    delete state.officers[id];
+    saveState(); renderOfficerList();
+    showToast('Officer removed.', 'info');
+  });
+}
+
+function renderOfficerList() {
+  const el = document.getElementById('officerAccounts');
+  if (!el) return;
+  el.innerHTML = Object.keys(state.officers).map(id => `
+    <div class="officer-row">
+      <span style="color:var(--accent);font-family:var(--font-mono)">${id.toUpperCase()}</span>
+      ${id !== 'admin' ? `<button class="btn-danger btn-sm" onclick="removeOfficer('${id}')">Remove</button>` : '<span style="color:var(--text-muted);font-size:0.7rem">ADMIN</span>'}
+    </div>
+  `).join('');
+}
+
+function clearAllData() {
+  confirm2('⚠ Clear ALL Data', 'This will delete all calls, records, units, warrants, BOLOs, and logs. This cannot be undone. Are you sure?', () => {
+    state.calls = []; state.units = []; state.civilians = [];
+    state.vehicles = []; state.warrants = []; state.bolos = []; state.logs = [];
+    callIdCounter = 1000;
+    saveState(); renderAll(); updateDashboard();
+    showToast('All CAD data cleared.', 'info');
+  });
+}
+
+// ─────────────────────────────────────
+//  DISCORD WEBHOOK
+// ─────────────────────────────────────
+async function sendDiscordLog(title, description, color = 0x00bfff) {
+  const url = state.settings.webhookUrl;
+  if (!url || !url.includes('discord.com/api/webhooks')) return;
+
+  const level = state.settings.logLevel || 'all';
+  if (level === 'critical' && !title.includes('Call') && !title.includes('Warrant') && !title.includes('BOLO')) return;
+  if (level === 'calls' && !title.includes('Call')) return;
+
+  const payload = {
+    username: state.settings.deptName ? `${state.settings.deptName} CAD` : 'NexusCAD',
+    avatar_url: 'https://i.imgur.com/4M34hi2.png',
+    embeds: [{
+      title,
+      description,
+      color,
+      footer: { text: `NexusCAD • ${new Date().toLocaleString()}` },
+      timestamp: new Date().toISOString()
+    }]
+  };
+
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) {
+    console.warn('Discord webhook failed:', e.message);
+  }
+}
+
+// ─────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────
+function fmtTime(iso) {
+  if (!iso) return 'N/A';
+  return new Date(iso).toLocaleString();
+}
+
+function priorityLabel(p) {
+  return { '1':'P1 — CRITICAL', '2':'P2 — HIGH', '3':'P3 — MEDIUM', '4':'P4 — LOW' }[p] || `P${p}`;
+}
+
+function priorityColor(p) {
+  return { '1':0xff3d57, '2':0xffc107, '3':0x00bfff, '4':0x00e676 }[p] || 0x00bfff;
+}
+
+function statusClass(s) {
+  if (s === '10-8' || s === '10-97' || s === '10-4') return 'available';
+  if (s === '10-7') return 'offduty';
+  return 'busy';
+}
+
+function showToast(msg, type='info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast ${type}`;
+  t.classList.remove('hidden');
+  setTimeout(() => t.classList.add('hidden'), 3500);
+}
+
+// Confirm modal
+let _confirmCallback = null;
+function confirm2(title, msg, cb) {
+  _confirmCallback = cb;
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMsg').textContent = msg;
+  document.getElementById('confirmModal').classList.remove('hidden');
+  document.getElementById('confirmYes').onclick = () => { closeConfirm(); cb(); };
+}
+function closeConfirm() {
+  document.getElementById('confirmModal').classList.add('hidden');
+}
+
+// Enter key support for login
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('loginPassword').addEventListener('keydown', e => {
+    if (e.key === 'Enter') attemptLogin();
+  });
+  document.getElementById('loginUsername').addEventListener('keydown', e => {
+    if (e.key === 'Enter') document.getElementById('loginPassword').focus();
+  });
+  init();
+});
